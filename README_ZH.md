@@ -14,13 +14,26 @@ RevoSim 面向 real-to-sim-to-real，将视觉外观、关节运动学、动力�
   </a>
 </p>
 
-每手有 21 个转动关节、247 个压阻通道和 5 个指尖视触觉区域。通过 Python API 或键盘控制物体，读取 RGB、Marker 位移、深度、六维接触合力和压阻响应。
+每手有 21 个转动关节和 5 个指尖视触觉区域。新版 **MT 每手 519 个触觉采样点**，**MX 每手 387 个**，包含指尖与指腹侧面；采样点数量不等同于独立硬件通道数量。通过 Python API 或键盘控制物体，读取 RGB、Marker 位移、深度、六维接触合力和压阻响应。
 
-<p align="center">
-  <a href="docs/videos/revosim-demo-60fps.mp4">
-    <img src="docs/images/revosim-demo.gif" width="960" alt="RevoSim: three-object tactile demo with fingertip sensors and pressure maps">
-  </a>
-</p>
+## MT 与 MX 触觉布局
+
+十个球同步测试指尖、指腹、已有触点的侧面，再以每掌五球沿触点条带往复滑动。四根长指等角展开，左手 marker 的上下显示方向与右手一致。GIF 为 **2 倍速**，点击可查看 **41 秒正常速度 MP4**。
+
+| 版本 | 指尖 | 指腹及侧面 | 手掌 | 每手总数 |
+|---|---:|---:|---:|---:|
+| MT（默认） | 115 | 333 | 71 | 519 |
+| MX | 140 | 130 | 117 | 387 |
+
+### MT
+
+[![MT tactile sweep](docs/images/revosim-mt-sweep.gif)](docs/videos/revosim-mt-sweep.mp4)
+
+### MX
+
+[![MX tactile sweep](docs/images/revosim-mx-sweep.gif)](docs/videos/revosim-mx-sweep.mp4)
+
+读数是归一化 SDF/弹簧代理响应，不能作为硬件灵敏度标定。两版共享 RevoSim 光学模型和机械 PBR USD。随包 URDF 保留各自的点位编号与球心，球心位于选定表皮下 1.5 mm，显示球半径为 1.8 mm；运行时接触采样点在表面外 0.2 mm。本演示探球半径为 4 mm。详见[模型说明](docs/model-variants.md)。
 
 ## 环境
 
@@ -50,6 +63,13 @@ python tools/doctor.py
 ## 直接运行
 
 ```bash
+# 十球同步测试，包含指腹侧面和手掌滑移。
+python examples/sweep_response.py --variant MT --headless --device cuda:0 --output outputs/MT
+python examples/sweep_response.py --variant MX --headless --device cuda:0 --output outputs/MX
+
+# 原有演示也可通过环境变量选择版本。
+REVO_VARIANT=MX python examples/read_sensors.py --headless --device cuda:0
+
 # 读取传感器数据。
 python examples/read_sensors.py --headless --device cuda:0
 
@@ -70,7 +90,7 @@ python examples/finger_dance.py --headless --device cuda:0 --output outputs/fing
 
 ## 面板与数据
 
-输出目录包括：
+不同演示会输出以下文件：
 
 | 文件 | 内容 |
 |---|---|
@@ -82,6 +102,8 @@ python examples/finger_dance.py --headless --device cuda:0 --output outputs/fing
 | `frames.jsonl` | 每一帧的时间与演示阶段 |
 | `physics.json` | 运行时添加的碰撞几何及质量补全记录 |
 | `report.json` | 覆盖范围、各通道峰值和释放状态 |
+| `responses.npz` | 十球演示逐帧响应、探球位姿、外加力/接触力与阶段编号 |
+| `settings.json` | 十球演示的版本、原点位编号、轨迹和力参数 |
 | `telemetry.npz` | 并行演示逐帧的力、压阻、Marker、深度峰值、接触标志、物体姿态与光学目标编号 |
 
 数组的第一维按 `left, right` 排列，第二维手指按 `thumb, index, middle, ring, little` 排列：
@@ -93,7 +115,7 @@ python examples/finger_dance.py --headless --device cuda:0 --output outputs/fing
 | `marker` | `[2,5,100,3]` | 指尖软垫 link 局部坐标的位移，米；需结合有效性掩码 |
 | `wrench` | `[2,5,6]` | 指尖软垫与目标物体的接触合力与力矩，`Fx,Fy,Fz,Tx,Ty,Tz`，N / N·m |
 | `contact` | `[2,5]` | 是否存在该指尖软垫与目标的法向接触 |
-| `pressure` | `[2,247]` | 扩散后的非负归一化响应，可大于 1；不是 Pa、N 或电阻值 |
+| `pressure` | `[2,519]` (MT) / `[2,387]` (MX) | 扩散后的非负归一化响应，可大于 1；不是 Pa、N 或电阻值 |
 | `pad_pose` | `[2,5,7]` | 指尖软垫世界位置与 wxyz 四元数 |
 | `joint_pos` | `[2,21]` | 实际关节角，弧度 |
 | `object_pose` | `[7]` | 第一个目标物体世界位置与 wxyz 四元数 |
@@ -102,7 +124,7 @@ python examples/finger_dance.py --headless --device cuda:0 --output outputs/fing
 
 六维合力仅包含 `DIP_rubber_link` 软垫与目标物体之间的法向力和摩擦力，不汇总近节、中节或硬壳上的接触。力矩参考点是 `DIP_rubber_link` 原点，结果也表达在这个局部坐标系中；面板为便于阅读把 N·m 转为 N·mm，原始数据始终保存 N·m。
 
-压阻通道顺序：中指 MCP 23 / PIP 4，食指 23 / 4，无名指 23 / 4，小指 23 / 4，拇指 18 / 4，掌面 117。可通过 `revosim.resources.pressure_regions()` 获取切片。
+采样顺序：中指、食指、无名指、小指、拇指（各自 MCP 后 PIP），随后手掌，再按拇指、食指、中指、无名指、小指排列五组指尖。通过 `pressure_regions(variant)` 获取切片，通过 `world.sensor_layout()` 获取原编号、位置、法向和所属坐标系。默认 MT；可设置 `REVO_VARIANT=MX` 或使用 `World(variant="MX")`。
 
 ## Python API
 

@@ -9,7 +9,9 @@ from . import make_tactile_cfg, TactileSensor
 
 
 class MultiTargetTactile:
-    def __init__(self, robot_path, side, target_paths):
+    def __init__(
+        self, robot_path, side, target_paths, *, variant=None, target_radii=None
+    ):
         self.side = side
         self.banks = [
             TactileSensor(
@@ -19,13 +21,69 @@ class MultiTargetTactile:
                     hands=(side,),
                     object_sample_count=8192,
                     pressure_diffusion=False,
+                    variant=variant,
+                    target_bounding_radius_m=None
+                    if target_radii is None
+                    else target_radii[i],
                 )
             )
-            for path in target_paths
+            for i, path in enumerate(target_paths)
         ]
         self._children = self.banks[0]._children
         self.cache = {}
         self.max_simultaneous_targets_per_pad = 0
+        self.cooldown = [0] * len(self.banks)
+        self.candidates = [True] * len(self.banks)
+        self.defaults = {}
+        self.gated_reads = 0
+        self.audit_max_error = 0.0
+
+    def set_optical_candidates(self, flags):
+        self.cooldown = [
+            3 if near else max(c - 1, 0) for c, near in zip(self.cooldown, flags)
+        ]
+        self.candidates = [c > 0 for c in self.cooldown]
+
+    def _bank_read(self, index, name):
+        if not self.candidates[index] and name in self.defaults:
+            self.gated_reads += 1
+            return self.defaults[name]
+        value = getattr(self.banks[index], "get_" + name)()
+        if name not in self.defaults and not self.candidates[index]:
+            if name == "rgb":
+                self.defaults[name] = value.clone()
+            else:
+                if float(value.abs().max()) > 1e-8:
+                    raise RuntimeError("Nonzero outside optical mesh bounds")
+                self.defaults[name] = torch.zeros_like(value)
+        return value
+
+    def audit_gate(self):
+        # Compare skipped branches to the original backend at phase boundaries.
+        from .backends import observations as obs
+
+        for bank in self.banks:
+            fast = bank.get_pressure()[:, 0]
+            ctx = bank._contexts[self.side]
+            skipped = getattr(ctx, "_pressure_skip_names", set())
+            ctx._pressure_skip_names = set()
+            full = obs.ours_rl_pressure_obs(ctx, bank._components[self.side])
+            ctx._pressure_skip_names = skipped
+            err = float((fast - full).abs().max())
+            self.audit_max_error = max(self.audit_max_error, err)
+            if err > 1e-6:
+                raise RuntimeError(f"Pressure broad phase mismatch {err}")
+        for i, near in enumerate(self.candidates):
+            if near:
+                continue
+            for name in ["depth", "rgb", "marker_displacement"]:
+                if name not in self.defaults:
+                    continue
+                raw = getattr(self.banks[i], "get_" + name)()
+                err = float((raw - self.defaults[name]).abs().max())
+                self.audit_max_error = max(self.audit_max_error, err)
+                if err > 1e-6:
+                    raise RuntimeError(f"Optical gate mismatch {name}: {err}")
 
     def update(self, dt):
         for bank in self.banks:
@@ -39,7 +97,9 @@ class MultiTargetTactile:
 
     def _owners(self):
         if "owners" not in self.cache:
-            depth = torch.stack([bank.get_depth() for bank in self.banks])
+            depth = torch.stack(
+                [self._bank_read(i, "depth") for i in range(len(self.banks))]
+            )
             strength = depth.amax(dim=(-2, -1))
             count = (strength > 1e-5).sum(0)
             self.max_simultaneous_targets_per_pad = max(
@@ -60,7 +120,7 @@ class MultiTargetTactile:
                 self.cache["depth_banks"]
                 if name == "depth"
                 else torch.stack(
-                    [getattr(bank, "get_" + name)() for bank in self.banks]
+                    [self._bank_read(i, name) for i in range(len(self.banks))]
                 )
             )
             index = owner[None]

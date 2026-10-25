@@ -3,25 +3,6 @@ import numpy as np
 from revosim.resources import ASSETS, pressure_regions, sensor_paths
 
 
-def test_pressure_layout_covers_exactly_247_channels():
-    import xml.etree.ElementTree as E
-
-    regions = pressure_regions()
-    assert sum(s.stop - s.start for s in regions.values()) == 247
-    assert regions["palm"].stop - regions["palm"].start == 117
-    for side in ["left", "right"]:
-        p = sensor_paths(side)["pressure"]
-        pads = E.parse(p).getroot().findall("link/pressure_pad")
-        assert [int(x.get("taxel_count")) for x in pads] == [
-            s.stop - s.start for s in regions.values()
-        ]
-        for pad in pads:
-            points = np.load(p.parent / pad.get("points_npy"))
-            normals = np.load(p.parent / pad.get("normals_npy"))
-            assert points.shape == normals.shape == (int(pad.get("taxel_count")), 3)
-            assert np.isfinite(points).all()
-            assert np.allclose(np.linalg.norm(normals, axis=1), 1, atol=1e-5)
-
 
 def test_package_has_no_runtime_revobench_imports():
     root = ASSETS.parent

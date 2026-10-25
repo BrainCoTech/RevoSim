@@ -120,6 +120,6 @@ class ParallelDemo:
                 name = (
                     "palm" if j["region"] == "palm" else j["finger"] + "_" + j["region"]
                 )
-                response = float(values["pressure"][h, pressure_regions()[name]].max())
+                response = float(values["pressure"][h, pressure_regions(self.world.variant)[name]].max())
             key = f"{j['side']}/{j['finger']}/{j['region']}"
             self.coverage[key] = max(self.coverage[key], response)

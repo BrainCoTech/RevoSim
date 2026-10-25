@@ -281,6 +281,9 @@ def warpsdf_pressure_obs(
     chunks: list[torch.Tensor] = []
 
     for sensor_name, per_sensor_dim in zip(pressure_sensor_names, sensor_dims, strict=True):
+        if sensor_name in getattr(env, "_pressure_skip_names", set()):
+            chunks.append(_zeros(env, per_sensor_dim))
+            continue
         try:
             sensor = env.scene.sensors[str(sensor_name)]
         except KeyError:
@@ -2818,6 +2821,8 @@ def _ours_taxim_rgb_policy_from_local(
             f"reference={(render_rows, render_cols)}, configured={(configured_rows, configured_cols)}"
         )
     dense_depth = _ours_dense_tacmap_depth_from_local(env, local_depth_m, local_active, cfg)
+    if cfg.get("display_flip_y", False):
+        dense_depth = dense_depth.flip(-2)
 
     adapter = _ours_taxim_rgb_adapter(env, cfg)
     background = _ours_taxim_rgb_background(
@@ -2942,6 +2947,8 @@ def ours_rl_tacmap_policy_obs(
     if local_depth is None or local_active is None:
         raise RuntimeError("Full-resolution RL Depth requires local_tacmap_enabled=True")
     dense_depth = _ours_dense_tacmap_depth_from_local(env, local_depth, local_active, cfg)
+    if cfg.get("display_flip_y", False):
+        dense_depth = dense_depth.flip(-2)
     return dense_depth.reshape(env.num_envs, -1)
 
 

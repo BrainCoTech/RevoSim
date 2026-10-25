@@ -21,38 +21,26 @@ def build_hand(cfg, side):
     namespace = robot.rsplit('/', 1)[0]
     target = cfg.target_prim_paths[0].replace('{ENV_REGEX_NS}', namespace)
     children = {}
-    components = dict(pressure_sensor_names=[], pressure_taxel_counts=[],
+    components = dict(display_flip_y=(side == "left"), pressure_sensor_names=[], pressure_taxel_counts=[],
                       pressure_diffusion_enabled=cfg.pressure_diffusion,
                       pressure_diffusion_sigma_m=diffusion['sigma_m'], pressure_diffusion_blend=diffusion['blend'],
                       pressure_diffusion_radius_sigma=diffusion['radius_sigma'], pressure_diffusion_normal_power=diffusion['normal_power'])
     if cfg.pressure:
-        from .backends.urdf_pressure_layout import load_pressure_pad_specs_from_urdf
+        from revosim.resources import release_layout
         from .backends.warp_sdf_tactile_cfg import WarpSdfTactileSensorCfg
-        specs = load_pressure_pad_specs_from_urdf(paths['pressure'], require_files=False)
-        # The left snapshot is already mirrored, including origins and normals.
-        for spec in specs:
-            grid = spec.to_taxel_map()
-            normals = np.asarray(grid.normals_l).copy()
-            # The inherited MCP/PIP mesh normals point into the finger. Keep the
-            # original resources intact and orient their runtime sampling offset outward.
-            if '_hand_touch_link' not in spec.link_name:
-                normals *= -1
-            from .surface_registration import register_pad
-            points = register_pad(robot, mapping[spec.link_name], np.asarray(grid.points_l), normals)
-            name = mapping[spec.link_name] + '_pressure'
+        for g in release_layout(side, cfg.variant):
+            name = g['link']+'_pressure'
+            count = len(g['ids'])
             children[name] = WarpSdfTactileSensorCfg(
-                prim_path=robot, elastomer_prim_paths=[f'{robot}/{mapping[spec.link_name]}'],
-                num_rows=grid.image_shape[0], num_cols=grid.image_shape[1],
-                taxel_points_l=points.tolist(), taxel_normals_l=normals.tolist(),
-                normal_axis=spec.normal_axis, normal_sign=spec.normal_sign, normal_offset=0.0,
-                target_mesh_prim_path=target, mesh_max_dist=0.2, mesh_use_signed_distance=True,
-                mesh_signed_distance_method='winding', stiffness=spec.calibration.stiffness,
-                damping=spec.calibration.damping, max_force=spec.calibration.max_force,
-                pressure_gain=spec.calibration.gain, pressure_bias=spec.calibration.bias,
-                pressure_gamma=spec.calibration.gamma, pressure_threshold=spec.calibration.threshold,
-                taxel_area=spec.calibration.area, normalize_forces=True, store_debug_fields=False)
+                prim_path=robot, elastomer_prim_paths=[f"{robot}/{g['link']}"],
+                num_rows=1, num_cols=count,
+                taxel_points_l=g['points_local_m'], taxel_normals_l=g['normals_local'],
+                normal_axis=0, normal_sign=1, normal_offset=0.0,
+                target_mesh_prim_path=target, mesh_max_dist=.2, mesh_use_signed_distance=True,
+                mesh_signed_distance_method='winding', stiffness=5000., damping=0., max_force=10.,
+                normalize_forces=True, store_debug_fields=False)
             components['pressure_sensor_names'].append(name)
-            components['pressure_taxel_counts'].append(int(np.prod(grid.image_shape)))
+            components['pressure_taxel_counts'].append(count)
     if cfg.depth or cfg.marker or cfg.rgb:
         from isaaclab.sensors.ray_caster import patterns
         from .backends.sharpa_tacmap_link_surface import SharpaTacmapLinkSurface, SharpaTacmapLinkSurfaceCfg as RayCfg

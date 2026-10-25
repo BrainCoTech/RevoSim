@@ -11,7 +11,9 @@ from revosim.resources import (
     FINGERS,
     BACKEND_ORDER,
     sensor_paths,
-    pressure_regions,
+    resolve_variant,
+    release_layout,
+    urdf_path,
 )
 from revosim.tactile import make_tactile_cfg, TactileSensor
 from revosim.wrench import read_wrench
@@ -32,6 +34,8 @@ class World:
         physics_hz=240,
         observation_hz=60,
         hand_spacing=0.26,
+        variant=None,
+        probe_radius=0.007,
     ):
         if physics_hz % observation_hz:
             raise ValueError("physics_hz must be divisible by observation_hz")
@@ -53,9 +57,13 @@ class World:
                 use_fabric=True,
             )
         )
+        self.variant = resolve_variant(variant)
+        if not np.isfinite(probe_radius) or probe_radius <= 0:
+            raise ValueError("probe_radius must be finite and positive")
         self.hands = {}
         self.sensors = {}
         self.wrench_sensors = {}
+        self.palm_sensors = {}
         self.physics_manifest = {}
         self.calibration = {}
         for side in SIDES:
@@ -76,8 +84,52 @@ class World:
         self.meshes = {}
         for i, (name, path) in enumerate(zip(shapes, paths)):
             self.objects[name], self.meshes[name] = create_object(
-                self.sim.stage, name, path, position=(i * 0.06, 0.20, 0.50)
+                self.sim.stage,
+                "sphere" if name.startswith("ball_") else name,
+                path,
+                position=(i * 0.06, 0.20, 0.50),
+                sphere_radius=probe_radius,
             )
+        from pxr import UsdPhysics
+
+        probe_filters = [
+            str(p.GetPath())
+            for p in self.sim.stage.Traverse()
+            if (
+                str(p.GetPath()).startswith("/World/Left/")
+                or str(p.GetPath()).startswith("/World/Right/")
+            )
+            and p.HasAPI(UsdPhysics.RigidBodyAPI)
+        ]
+        self.probe_sensors = {
+            name: ContactSensor(
+                ContactSensorCfg(
+                    prim_path=path,
+                    filter_prim_paths_expr=probe_filters,
+                    max_contact_data_count_per_prim=4096,
+                )
+            )
+            for name, path in zip(shapes, paths)
+        }
+        import json
+        from revosim.resources import ASSETS
+
+        self.optical_bounds = json.loads((ASSETS / "optical_bounds.json").read_text())
+        self.object_radii = {
+            name: float(np.linalg.norm(mesh.vertices, axis=-1).max())
+            for name, mesh in self.meshes.items()
+        }
+        # Named sweep probes belong to one hand; general targets can contact either.
+        self._sensor_object_indices = {
+            side: [
+                i
+                for i, n in enumerate(shapes)
+                if not n.startswith("ball_") or n.startswith("ball_" + side + "_")
+            ]
+            for side in SIDES
+        }
+        if any(not ids for ids in self._sensor_object_indices.values()):
+            raise ValueError("Each hand needs at least one target object")
         self.object = self.objects[shapes[0]]
         self.mesh = self.meshes[shapes[0]]
         self._targets = {name: None for name in shapes}
@@ -90,10 +142,14 @@ class World:
                         target_prim_paths=(paths[0],),
                         hands=(side,),
                         object_sample_count=8192,
+                        variant=self.variant,
+                        target_bounding_radius_m=self.object_radii[shapes[0]],
                     )
                 )
                 if len(shapes) == 1
-                else self._multi_sensor(path, side, paths)
+                else self._multi_sensor(
+                    path, side, [paths[i] for i in self._sensor_object_indices[side]]
+                )
             )
             self.wrench_sensors[side] = [
                 ContactSensor(
@@ -104,6 +160,16 @@ class World:
                     )
                 )
                 for f in FINGERS
+            ]
+            self.palm_sensors[side] = [
+                ContactSensor(
+                    ContactSensorCfg(
+                        prim_path=f"{path}/{side}_{link}",
+                        filter_prim_paths_expr=paths,
+                        max_contact_data_count_per_prim=4096,
+                    )
+                )
+                for link in ("plam_touch_link", "plam_rubber_link", "plam_link")
             ]
             with np.load(sensor_paths(side)["vtac"] / "marker_positions.npz") as npz:
                 self.calibration[side] = {k: npz[k].copy() for k in npz.files}
@@ -137,11 +203,19 @@ class World:
             for s, h in self.hands.items()
         }
 
-    @staticmethod
-    def _multi_sensor(path, side, targets):
+    def _multi_sensor(self, path, side, targets):
         from revosim.tactile.multi_target import MultiTargetTactile
 
-        return MultiTargetTactile(path, side, targets)
+        return MultiTargetTactile(
+            path,
+            side,
+            targets,
+            variant=self.variant,
+            target_radii=[
+                self.object_radii[list(self.objects)[i]]
+                for i in self._sensor_object_indices[side]
+            ],
+        )
 
     @property
     def target(self):
@@ -205,13 +279,18 @@ class World:
                         - obj.data.root_pos_w[0]
                     )
                     f = (
-                        180.0 * error
+                        getattr(self, "spring_stiffness", {}).get(name, 180.0) * error
                         - 3.8 * obj.data.root_lin_vel_w[0]
                         + torch.tensor([0, 0, 0.02 * 9.81], device=self.device)
                     )
                     force[0, 0] = f * torch.clamp(
-                        3.0 / f.norm().clamp_min(1e-6), max=1.0
+                        getattr(self, "force_caps", {}).get(name, 3.0)
+                        / f.norm().clamp_min(1e-6),
+                        max=1.0,
                     )
+                if not hasattr(self, "applied_forces"):
+                    self.applied_forces = {}
+                self.applied_forces[name] = force[0, 0].detach().cpu().numpy().copy()
                 obj.instantaneous_wrench_composer.set_forces_and_torques(
                     forces=force, torques=torch.zeros_like(force), is_global=True
                 )
@@ -225,8 +304,10 @@ class World:
                 obj.update(self.dt)
         for side in SIDES:
             self.sensors[side].update(self.obs_dt)
-            for sensor in self.wrench_sensors[side]:
+            for sensor in self.wrench_sensors[side] + self.palm_sensors[side]:
                 sensor.update(self.obs_dt)
+        for sensor in self.probe_sensors.values():
+            sensor.update(self.obs_dt)
         self.time += self.obs_dt
         if render:
             self.sim.render()
@@ -296,6 +377,31 @@ class World:
         for side in SIDES:
             sensor = self.sensors[side]
             hand = self.hands[side]
+            if hasattr(sensor, "set_optical_candidates"):
+                flags = []
+                for i in self._sensor_object_indices[side]:
+                    name = list(self.objects)[i]
+                    obj = self.objects[name]
+                    pos = obj.data.root_pos_w[0].cpu().numpy()
+                    near = False
+                    margin = self.object_radii[name] + 0.0015
+                    for link, bounds in self.optical_bounds[side].items():
+                        pose = (
+                            hand.data.body_link_state_w[
+                                0, hand.body_names.index(link), :7
+                            ]
+                            .cpu()
+                            .numpy()
+                        )
+                        R = Rotation.from_quat(pose[[4, 5, 6, 3]]).as_matrix()
+                        local = R.T @ (pos - pose[:3])
+                        bounds = np.array(bounds)
+                        near |= bool(
+                            np.all(local >= bounds[0] - margin)
+                            and np.all(local <= bounds[1] + margin)
+                        )
+                    flags.append(near)
+                sensor.set_optical_candidates(flags)
             values["pressure"].append(sensor.get_pressure()[0, 0].cpu().numpy().copy())
             values["depth"].append(
                 sensor.get_depth()[0, 0, list(BACKEND_ORDER)].cpu().numpy().copy()
@@ -330,6 +436,28 @@ class World:
             values["contact"].append(c)
             values["joint_pos"].append(hand.data.joint_pos[0].cpu().numpy().copy())
         values = {k: np.asarray(v) for k, v in values.items()}
+        values["palm_contact_forces"] = np.stack(
+            [
+                [
+                    sensor.contact_physx_view.get_contact_force_matrix(self.dt)
+                    .cpu()
+                    .numpy()
+                    .sum(axis=(0, 1))
+                    for sensor in self.palm_sensors[side]
+                ]
+                for side in SIDES
+            ]
+        )
+        values["probe_contact_forces"] = np.stack(
+            [
+                s.contact_physx_view.get_contact_force_matrix(self.dt)
+                .cpu()
+                .numpy()
+                .sum(axis=(0, 1))
+                .copy()
+                for s in self.probe_sensors.values()
+            ]
+        )
         values["time"] = self.time
         values["object_pose"] = (
             self.object.data.root_state_w[0, :7].cpu().numpy().copy()
@@ -350,8 +478,14 @@ class World:
                     for side in SIDES
                 ]
             )
+            for h, side in enumerate(SIDES):
+                owners[h] = np.asarray(self._sensor_object_indices[side])[owners[h]]
             values["optical_object_index"] = np.where(
                 values["depth"].max(axis=(-2, -1)) > 1e-5, owners, -1
+            )
+        else:
+            values["optical_object_index"] = np.where(
+                values["depth"].max(axis=(-2, -1)) > 1e-5, 0, -1
             )
         for key, v in values.items():
             if not np.isfinite(v).all():
@@ -359,41 +493,21 @@ class World:
         return values
 
     def sensor_layout(self):
-        """JSON-compatible channel locations, link names, joint order and limits.
-
-        Pressure positions are the runtime surface-registered sampling points,
-        in the indicated link frame; channel indices match ``observe`` exactly.
-        """
-        layout = {"sides": list(SIDES), "fingers": list(FINGERS), "hands": {}}
+        """Point centres and skin sampling positions, in their owning link frames."""
+        layout = dict(
+            sides=list(SIDES), fingers=list(FINGERS), variant=self.variant, hands={}
+        )
         for side in SIDES:
             hand = self.hands[side]
-            channels = []
-            for name, sl in pressure_regions().items():
-                link = (
-                    f"{side}_plam_touch_link"
-                    if name == "palm"
-                    else f"{side}_{name.rsplit('_', 1)[0]}_{name.rsplit('_', 1)[1].upper()}_touch_link"
-                )
-                child = self.sensors[side]._children[side][link + "_pressure"]
-                points = child._points_local_per_sensor[0].cpu().numpy()
-                normals = np.asarray(child.cfg.taxel_normals_l)
-                channels.append(
-                    {
-                        "region": name,
-                        "start": sl.start,
-                        "stop": sl.stop,
-                        "link": child.cfg.elastomer_prim_paths[0].split("/")[-1],
-                        "points_local_m": points.tolist(),
-                        "normals_local": normals.tolist(),
-                    }
-                )
-            layout["hands"][side] = {
-                "joint_names": list(hand.joint_names),
-                "joint_limits_rad": hand.data.joint_pos_limits[0]
-                .cpu()
-                .numpy()
-                .tolist(),
-                "pressure_regions": channels,
-                "optical_links": [f"{side}_{f}_DIP_rubber_link" for f in FINGERS],
-            }
+            layout["hands"][side] = dict(
+                pressure_regions=release_layout(side, self.variant),
+                joint_names=list(hand.joint_names),
+                joint_limits_rad=hand.data.joint_pos_limits[0].cpu().numpy().tolist(),
+                optical_links=[f"{side}_{f}_DIP_rubber_link" for f in FINGERS],
+                urdf=str(
+                    urdf_path(side, self.variant).relative_to(
+                        urdf_path(side, self.variant).parents[3]
+                    )
+                ),
+            )
         return layout

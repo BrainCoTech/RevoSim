@@ -16,7 +16,7 @@ try:
     import numpy as np
     from revosim.world import World
     from revosim.demo import Demo
-    from revosim.resources import pressure_regions
+    from revosim.resources import pressure_regions, pressure_count
 
     w = World(a.shape, device=a.device, observation_hz=15)
     demo = Demo(w, quick=a.quick)
@@ -24,7 +24,7 @@ try:
     base = w.observe()
     phases = {}
     peaks = {k: np.zeros((2, 5)) for k in ["depth", "marker", "wrench", "rgb_change"]}
-    pp = np.zeros((2, 247))
+    pp = np.zeros((2, pressure_count(w.variant)))
     last = None
     while app.is_running():
         phase = demo.update(w.time - start)

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "default_variant": "MT",
+  "mechanics": "Shared PBR USD articulation; original joint frames, COM and inertia retained, release masses applied at runtime.",
+  "sensor_centers_depth_m": 0.0015,
+  "visual_sphere_radius_m": 0.0018,
+  "runtime_surface_sample_offset_m": 0.0002,
+  "optical_model": "Shared RevoSim optical calibration; not hardware-calibrated MT/MX sensor models.",
+  "variants": {
+    "MT": {
+      "left": {
+        "urdf": "hands/variants/urdf/revo3_left_MT.urdf",
+        "sha256": "623e03d14abcba2e1a71bb6018754ed034d2ee1bfc742254e78276c1462bd30b",
+        "samples_per_hand": 519
+      },
+      "right": {
+        "urdf": "hands/variants/urdf/revo3_right_MT.urdf",
+        "sha256": "19152826a22880134820c336169b04dd31649bfc905ad34665d5896891f4cc44",
+        "samples_per_hand": 519
+      }
+    },
+    "MX": {
+      "left": {
+        "urdf": "hands/variants/urdf/revo3_left_MX.urdf",
+        "sha256": "addd31fda16e6bd18b8fdbe287969209334778c7a2b9cb3a92741573226d23af",
+        "samples_per_hand": 387
+      },
+      "right": {
+        "urdf": "hands/variants/urdf/revo3_right_MX.urdf",
+        "sha256": "b1d113b5a460ac7bbecc3898e8ef3f2ac193c0aa05bc35806a949dbc877f8535",
+        "samples_per_hand": 387
+      }
+    }
+  }
+}

@@ -67,7 +67,7 @@ def main():
         from revosim.demo import Demo
         from revosim.dashboard import Dashboard
         from revosim.recording import Recorder
-        from revosim.resources import pressure_regions
+        from revosim.resources import pressure_regions, pressure_count
 
         w = World(a.shape, device=a.device, observation_hz=a.fps)
         demo = Demo(w, quick=a.quick)
@@ -86,7 +86,7 @@ def main():
         peaks = {
             k: np.zeros((2, 5)) for k in ["depth", "marker", "wrench", "rgb_change"]
         }
-        pp = np.zeros((2, 247))
+        pp = np.zeros((2, pressure_count(w.variant)))
         frame = 0
         maxima = {}
         snapshots = a.output / "snapshots"

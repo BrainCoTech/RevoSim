@@ -88,6 +88,15 @@ def create_hand(stage, side, translation=None, orientation=(0.5, -0.5, -0.5, -0.
                 mat.func(mat_path, mat)
             sim_utils.bind_physics_material(str(prim.GetPath()), mat_path, stage=stage)
             collisions.append(name)
+    # Use current release masses, not the older RevoSim snapshot.
+    import json
+
+    release_masses = json.loads((ASSETS / "release_masses.json").read_text())[side]
+    for name, value in release_masses.items():
+        prim = stage.GetPrimAtPath(path + "/" + name)
+        if not prim.IsValid():
+            raise RuntimeError("Missing release body " + name)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(value)
     robot = Articulation(
         ArticulationCfg(
             prim_path=path,
@@ -104,14 +113,20 @@ def create_hand(stage, side, translation=None, orientation=(0.5, -0.5, -0.5, -0.
             },
         )
     )
-    return robot, dict(collisions=collisions, mass_regularized=regularized)
+    return robot, dict(
+        collisions=collisions,
+        mass_regularized=regularized,
+        release_masses=release_masses,
+    )
 
 
-def create_object(stage, shape, path="/World/Object", position=(0, 0, 0.5)):
+def create_object(
+    stage, shape, path="/World/Object", position=(0, 0, 0.5), sphere_radius=0.007
+):
     import trimesh
 
     if shape == "sphere":
-        mesh = trimesh.creation.icosphere(subdivisions=3, radius=0.007)
+        mesh = trimesh.creation.icosphere(subdivisions=3, radius=sphere_radius)
     elif shape == "cube":
         mesh = trimesh.creation.box(extents=(0.014, 0.014, 0.014))
     elif shape == "polyhedron":
@@ -141,6 +156,7 @@ def create_object(stage, shape, path="/World/Object", position=(0, 0, 0.5)):
     geom.CreateFaceVertexCountsAttr([3] * len(mesh.faces))
     geom.CreateSubdivisionSchemeAttr("none")
     UsdPhysics.RigidBodyAPI.Apply(root)
+    PhysxSchema.PhysxContactReportAPI.Apply(root).CreateThresholdAttr(0)
     UsdPhysics.MassAPI.Apply(root).CreateMassAttr(0.02)
     UsdPhysics.CollisionAPI.Apply(geom.GetPrim())
     UsdPhysics.MeshCollisionAPI.Apply(geom.GetPrim()).CreateApproximationAttr(

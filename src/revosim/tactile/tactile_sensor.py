@@ -20,7 +20,7 @@ class _Scene(dict):
 
 
 class TactileSensor(SensorBase):
-    """Lazy outputs: pressure[N,H,247], depth[N,H,5,240,320],
+    """Lazy outputs: pressure[N,H,P] (P=519 for MT, 387 for MX), depth[N,H,5,240,320],
     marker displacement[N,H,5,100,3] in world-frame meters, RGB[N,H,5,3,240,320].
 
     H follows cfg.hands. Fingers follow middle,index,ring,little,thumb.
@@ -38,6 +38,10 @@ class TactileSensor(SensorBase):
             raise ValueError('marker_history must be on_demand or continuous')
         if cfg.update_period != 0 or cfg.history_length != 0:
             raise ValueError('Use update_period=0 and history_length=0; drive the sampling rate through update(dt)')
+        from revosim.resources import resolve_variant
+        cfg.variant = resolve_variant(cfg.variant)
+        if cfg.target_bounding_radius_m is not None and (not math.isfinite(cfg.target_bounding_radius_m) or cfg.target_bounding_radius_m <= 0):
+            raise ValueError("target_bounding_radius_m must be finite and positive")
         super().__init__(cfg)
         self._cache = DemandCache(name for name in ('pressure', 'depth', 'marker', 'rgb') if getattr(cfg, name))
         self._data = TactileSensorData(self)
@@ -77,6 +81,7 @@ class TactileSensor(SensorBase):
 
     def _initialize_impl(self):
         super()._initialize_impl()
+        self._pressure_broadphase = {}
         self._cache.invalidate()
         self._preserved.clear()
         import omni.physics.tensors.impl.api as physx
@@ -190,6 +195,30 @@ class TactileSensor(SensorBase):
             for side in self.cfg.hands:
                 ctx, component = self._contexts[side], self._components[side]
                 if modality == 'pressure':
+                    # Conservative bounding-sphere test; skip a group only if it
+                    # cannot contact in ANY environment. Direct sensor users can
+                    # leave the bound unset and always run the full SDF backend.
+                    radius = self.cfg.target_bounding_radius_m
+                    ctx._pressure_skip_names = set()
+                    if radius is not None:
+                        from isaaclab.utils.math import quat_apply_inverse
+                        from revosim.resources import release_layout
+                        if not hasattr(self, '_pressure_broadphase'):
+                            self._pressure_broadphase = {}
+                        if side not in self._pressure_broadphase:
+                            groups = release_layout(side, self.cfg.variant)
+                            names = list(self._robot_view.shared_metatype.link_names)
+                            self._pressure_broadphase[side] = (
+                                [g['link']+'_pressure' for g in groups],
+                                [names.index(g['link']) for g in groups],
+                                torch.stack([torch.tensor(g['points_local_m'],device=self.device).amin(0) for g in groups]),
+                                torch.stack([torch.tensor(g['points_local_m'],device=self.device).amax(0) for g in groups]))
+                        pnames,indices,lower,upper = self._pressure_broadphase[side]
+                        poses = ctx.scene['robot'].data.body_link_state_w[:,indices,:7]
+                        relative = ctx.scene['object'].data.root_pos_w[:,None,:] - poses[:,:,:3]
+                        local = quat_apply_inverse(poses[:,:,3:7].reshape(-1,4), relative.reshape(-1,3)).reshape_as(relative)
+                        empty = ((local < lower-radius-1e-5) | (local > upper+radius+1e-5)).any(-1).all(0)
+                        ctx._pressure_skip_names = {name for name,skip in zip(pnames,empty.tolist()) if skip}
                     value = obs.ours_rl_pressure_obs(ctx, component)
                 elif modality == 'depth':
                     value = obs.ours_rl_tacmap_policy_obs(ctx, component).reshape(self._num_envs, 5, 240, 320)

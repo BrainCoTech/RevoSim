@@ -9,6 +9,7 @@ from revosim.resources import SIDES
 
 class PressureDisplay:
     def __init__(self, world, font, small):
+        self.variant = world.variant
         self.font = font
         self.small = small
         self.hands = {}
@@ -86,7 +87,7 @@ class PressureDisplay:
                     label_x = b[0] + 15 if side == "left" else a[0] - 145
                     draw.text(
                         (label_x, (a[1] + b[1]) / 2 - 12),
-                        "PALM / 117",
+                        f"PALM / {len(p)}",
                         font=font,
                         fill="#afc1d3",
                     )
@@ -116,12 +117,22 @@ class PressureDisplay:
             )
             d.text(
                 (22, 16),
-                side.upper() + " / PRESSURE",
+                side.upper() + " / " + self.variant + " TAXEL RESPONSE",
                 font=self.font,
                 fill="#72c8f4" if h == 0 else "#edc389",
             )
-            d.text((22, 53), "247 original channels", font=self.small, fill="#b2c3d4")
-            d.text((22, 78), "117 palm + 130 finger", font=self.small, fill="#b2c3d4")
+            d.text(
+                (22, 53),
+                f"{len(xy)} release point IDs",
+                font=self.small,
+                fill="#b2c3d4",
+            )
+            d.text(
+                (22, 78),
+                "Includes fingertip + side samples",
+                font=self.small,
+                fill="#b2c3d4",
+            )
             d.text((22, 110), "MCP: proximal", font=self.small, fill="#8da6bc")
             d.text((22, 134), "PIP: middle", font=self.small, fill="#8da6bc")
             d.text(
@@ -147,7 +158,7 @@ class PressureDisplay:
             )
             d.text(
                 (22, 500),
-                "Normalized response | display 0–1",
+                "SDF + spring proxy / display 0-1",
                 font=self.small,
                 fill="#8da6bc",
             )
