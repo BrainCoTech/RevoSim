@@ -18,6 +18,11 @@ PRESSURE_ORDER = (
     "thumb_mcp",
     "thumb_pip",
     "palm",
+    "thumb_tip",
+    "index_tip",
+    "middle_tip",
+    "ring_tip",
+    "little_tip",
 )
 
 
@@ -39,19 +44,52 @@ def sensor_paths(side, root=None):
     )
 
 
-def pressure_regions():
-    result = {}
-    offset = 0
-    for name, count in zip(PRESSURE_ORDER, (23, 4) * 4 + (18, 4, 117)):
-        result[name] = slice(offset, offset + count)
-        offset += count
-    return result
+VARIANTS = ("MT", "MX")
+
+
+def resolve_variant(variant=None):
+    import os
+
+    value = variant if variant is not None else os.environ.get("REVO_VARIANT", "MT")
+    if value not in VARIANTS:
+        raise ValueError(f"Unknown tactile variant {value!r}; choose MT or MX")
+    return value
+
+
+def release_layout(side, variant=None):
+    """Return ordered point IDs, preserved centres, normals and surface samples."""
+    import json
+
+    if side not in SIDES:
+        raise ValueError(side)
+    return json.loads((ASSETS / "release_layouts.json").read_text())[
+        resolve_variant(variant)
+    ][side]
+
+
+def urdf_path(side, variant=None):
+    if side not in SIDES:
+        raise ValueError(side)
+    return (
+        ASSETS / "hands/variants/urdf" / f"revo3_{side}_{resolve_variant(variant)}.urdf"
+    )
+
+
+def pressure_regions(variant=None):
+    return {
+        g["region"]: slice(g["start"], g["stop"])
+        for g in release_layout("left", variant)
+    }
+
+
+def pressure_count(variant=None):
+    return release_layout("left", variant)[-1]["stop"]
 
 
 def model_manifest():
     return {
         "pressure_presets": {
-            "sample_offset_m": 0.001,
+            "sample_offset_m": 0.0002,
             "diffusion": {
                 "sigma_m": 0.003,
                 "blend": 0.7,

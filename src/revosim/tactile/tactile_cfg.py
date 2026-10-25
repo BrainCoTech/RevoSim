@@ -20,6 +20,8 @@ class TactileSensorCfg(SensorBaseCfg):
     class_type: type = TactileSensor
     target_prim_paths: tuple[str, ...] = ('{ENV_REGEX_NS}/Object',)
     hands: tuple[str, ...] = ('left', 'right')
+    variant: str | None = None
+    target_bounding_radius_m: float | None = None
     pressure: bool = True
     depth: bool = True
     outer_surface_reference: bool = True  # cached outer exit; markers retain their calibration

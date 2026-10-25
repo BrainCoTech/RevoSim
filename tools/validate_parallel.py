@@ -27,7 +27,9 @@ with np.load(a.directory / "telemetry.npz") as trace:
         assert np.isfinite(trace[name]).all(), name
     np.testing.assert_allclose(np.diff(trace["time"]), 1 / report["fps"], atol=1e-9)
     assert trace["wrench"].shape == (n, 2, 5, 6)
-    assert trace["pressure"].shape == (n, 2, 247)
+    layout = json.loads((a.directory / "sensor_layout.json").read_text())
+    count = layout["hands"]["left"]["pressure_regions"][-1]["stop"]
+    assert trace["pressure"].shape == (n, 2, count)
     assert trace["object_poses"].shape == (n, 3, 7)
     owners = trace["optical_object_index"]
     assert set(np.unique(owners)) == {-1, 0, 1, 2}

@@ -14,13 +14,26 @@ RevoSim integrates visual appearance, joint kinematics, dynamics, and multimodal
   </a>
 </p>
 
-Each hand has 21 revolute joints, 247 piezoresistive channels, and five fingertip visuotactile regions. Control objects through the Python API or keyboard and read RGB, marker displacement, depth, six-axis contact wrench, and piezoresistive responses.
+Each hand has 21 revolute joints and five fingertip visuotactile regions. The updated **MT** layout has **519 tactile samples per hand**; **MX** has **387**. Samples include fingertips and finger sides, and do not imply an equal number of independent hardware channels. Control objects through the Python API or keyboard and read RGB, marker displacement, depth, six-axis contact wrench, and piezoresistive responses.
 
-<p align="center">
-  <a href="docs/videos/revosim-demo-60fps.mp4">
-    <img src="docs/images/revosim-demo.gif" width="960" alt="RevoSim: three-object tactile demo with fingertip sensors and pressure maps">
-  </a>
-</p>
+## MT and MX tactile layouts
+
+The ten probes move together over fingertips, finger pads, populated side patches, and five tracks on each palm. The four long fingers have equal angular spacing; the left marker display uses the same vertical convention as the right. GIFs play at **2× speed**; click either preview for the **41-second, normal-speed MP4**.
+
+| Variant | Fingertips | Pads and sides | Palm | Total per hand |
+|---|---:|---:|---:|---:|
+| MT (default) | 115 | 333 | 71 | 519 |
+| MX | 140 | 130 | 117 | 387 |
+
+### MT
+
+[![MT tactile sweep](docs/images/revosim-mt-sweep.gif)](docs/videos/revosim-mt-sweep.mp4)
+
+### MX
+
+[![MX tactile sweep](docs/images/revosim-mx-sweep.gif)](docs/videos/revosim-mx-sweep.mp4)
+
+These are normalized SDF/spring responses, not calibrated hardware sensitivity measurements. Both variants share the RevoSim optical model and mechanical PBR USD. The supplied URDFs preserve their own point IDs and centres, 1.5 mm below the selected skin surface, with 1.8 mm visual spheres. Runtime contact samples lie 0.2 mm outside that surface; the probe balls in this demo have a 4 mm radius. See [model details](docs/model-variants.md).
 
 ## Environment
 
@@ -50,6 +63,13 @@ Installation reference: [Isaac Sim 5.1](https://docs.isaacsim.omniverse.nvidia.c
 ## Run the demos
 
 ```bash
+# Ten synchronized probes, including finger sides and palm sliding.
+python examples/sweep_response.py --variant MT --headless --device cuda:0 --output outputs/MT
+python examples/sweep_response.py --variant MX --headless --device cuda:0 --output outputs/MX
+
+# Existing demos also accept the variant through the environment.
+REVO_VARIANT=MX python examples/read_sensors.py --headless --device cuda:0
+
 # Read sensor data.
 python examples/read_sensors.py --headless --device cuda:0
 
@@ -70,7 +90,7 @@ Keyboard controls: `W/S` forward/backward, `A/D` left/right, `Q/E` up/down, Spac
 
 ## Dashboard and data
 
-The output directory contains:
+Depending on the demo, the output directory contains:
 
 | File | Contents |
 |---|---|
@@ -82,6 +102,8 @@ The output directory contains:
 | `frames.jsonl` | Per-frame time and demonstration phase |
 | `physics.json` | Collision geometry added at runtime and records of missing-mass regularization |
 | `report.json` | Coverage, per-channel peaks, and release state |
+| `responses.npz` | Sweep demo: per-frame tactile responses, probe poses, applied/contact forces and phase indices |
+| `settings.json` | Sweep variant, original point IDs, trajectories and force settings |
 | `telemetry.npz` | Per-frame wrench, pressure, marker and depth peaks, contact flags, object poses, and optical target indices for the parallel demo |
 
 The first array dimension follows `left, right`. The second dimension, where it indexes fingers, follows `thumb, index, middle, ring, little`:
@@ -93,7 +115,7 @@ The first array dimension follows `left, right`. The second dimension, where it 
 | `marker` | `[2,5,100,3]` | Displacement in the fingertip soft-pad link's local coordinates, in meters; use with the validity mask |
 | `wrench` | `[2,5,6]` | Resultant contact force and torque between the fingertip soft pad and target object: `Fx,Fy,Fz,Tx,Ty,Tz`, in N and N·m |
 | `contact` | `[2,5]` | Whether the fingertip soft pad and target have normal contact |
-| `pressure` | `[2,247]` | Nonnegative normalized response after spatial diffusion; may exceed 1 and is not measured in Pa, N, or resistance |
+| `pressure` | `[2,519]` (MT) / `[2,387]` (MX) | Variant-specific tactile samples after spatial diffusion; may exceed 1 and is not measured in Pa, N, or resistance |
 | `pad_pose` | `[2,5,7]` | Fingertip soft-pad world position and wxyz quaternion |
 | `joint_pos` | `[2,21]` | Measured joint angles in radians |
 | `object_pose` | `[7]` | World pose of the first target object: position and wxyz quaternion |
@@ -102,7 +124,7 @@ The first array dimension follows `left, right`. The second dimension, where it 
 
 The six-axis wrench includes only normal and frictional forces between the `DIP_rubber_link` soft pad and the target object. It does not aggregate contacts on proximal/middle phalanges or rigid shells. Torque is referenced to the `DIP_rubber_link` origin, and the wrench is expressed in that link's local frame. The dashboard converts N·m to N·mm for readability; raw data always uses N·m.
 
-Piezoresistive channel order: middle MCP 23 / PIP 4, index 23 / 4, ring 23 / 4, little 23 / 4, thumb 18 / 4, and palm 117. Use `revosim.resources.pressure_regions()` to retrieve the slices.
+Sample order: middle, index, ring, little, thumb (MCP then PIP), palm, then the five fingertip groups in thumb/index/middle/ring/little order. Use `pressure_regions(variant)` for slices and `world.sensor_layout()` for exact IDs, positions, normals and link frames. MT is the default; set `REVO_VARIANT=MX` or pass `World(variant="MX")`.
 
 ## Python API
 

@@ -10,6 +10,8 @@ p.add_argument("directory", type=Path)
 p.add_argument("--quick", action="store_true")
 a = p.parse_args()
 d = a.directory
+layout = json.loads((d / "sensor_layout.json").read_text())
+count = layout["hands"]["left"]["pressure_regions"][-1]["stop"]
 r = json.loads((d / "report.json").read_text())
 assert r["complete_sequence"], "Truncated sequence"
 if not a.quick:
@@ -33,7 +35,7 @@ with h5py.File(d / "observations.h5") as f:
         "rgb": (2, 5, 3, 240, 320),
         "depth": (2, 5, 240, 320),
         "marker": (2, 5, 100, 3),
-        "pressure": (2, 247),
+        "pressure": (2, count),
         "wrench": (2, 5, 6),
         "contact": (2, 5),
         "pad_pose": (2, 5, 7),
@@ -76,7 +78,8 @@ with h5py.File(d / "observations.h5") as f:
         assert (
             np.linalg.norm(acceleration[:2]) < 0.5 and -11 < acceleration[2] < -8.5
         ), ("Hop is not ballistic", side, acceleration)
-        landing_response = float(f["pressure"][frame_ids, hand_index, 130:247].max())
+        palm = next(g for g in layout["hands"][side]["pressure_regions"] if g["region"] == "palm")
+        landing_response = float(f["pressure"][frame_ids, hand_index, palm["start"]:palm["stop"]].max())
         assert landing_response > 1e-5, ("Hop missed destination palm", side)
         hops[side] = {
             "fitted_free_flight_acceleration_m_s2": acceleration.tolist(),
@@ -85,7 +88,7 @@ with h5py.File(d / "observations.h5") as f:
 layout = json.loads((d / "sensor_layout.json").read_text())
 for side in ["left", "right"]:
     regions = layout["hands"][side]["pressure_regions"]
-    assert sum(len(x["points_local_m"]) for x in regions) == 247
+    assert sum(len(x["points_local_m"]) for x in regions) == count
     assert len(layout["hands"][side]["joint_names"]) == 21
 import imageio_ffmpeg
 

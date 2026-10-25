@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 import numpy as np
 import imageio.v2 as imageio
+from revosim.resources import resolve_variant, release_layout
 
 
 class Recorder:
-    def __init__(self, directory, fps=60, save_data=True):
+    def __init__(self, directory, fps=60, save_data=True, variant=None):
+        variant = resolve_variant(variant)
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.writer = imageio.get_writer(
@@ -27,6 +29,7 @@ class Recorder:
         (self.directory / "metadata.json").write_text(
             json.dumps(
                 {
+                    "variant": variant,
                     "fps": fps,
                     "physics_hz": 240,
                     "sides": ["left", "right"],
@@ -35,7 +38,7 @@ class Recorder:
                     "depth": "metres",
                     "marker": "metres, DIP_rubber_link local xyz, 100 original marker indices; consult validity mask",
                     "wrench": "[Fx,Fy,Fz,Tx,Ty,Tz], N and N m, DIP_rubber_link origin and local frame; only DIP_rubber_link contacts, normal + friction",
-                    "pressure": "247 normalized diffused responses per hand, can exceed 1; not Pa/N/ohms",
+                    "pressure": f"{release_layout('left', variant)[-1]['stop']} {variant} release samples per hand; normalized SDF/spring proxy with diffusion; can exceed 1; not measured Pa/N/ohms",
                     "scope": "two sensor-equipped hands; object_pose is the first object, object_poses contains all objects",
                 },
                 indent=2,

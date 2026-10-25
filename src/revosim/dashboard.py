@@ -29,13 +29,14 @@ class Dashboard:
         self.tiny = font(12)
         self.title = font(29)
         cam = UsdGeom.Camera.Define(stage, "/World/OverviewCamera")
-        cam.CreateFocalLengthAttr(42)
+        self.camera = cam
+        cam.CreateFocalLengthAttr(46)
         cam.CreateHorizontalApertureAttr(36)
         cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 10))
         eye = (
             Gf.Vec3d(0, -0.26, 0.80)
             if world.hand_spacing <= 0.21
-            else Gf.Vec3d(0, -0.29, 0.90)
+            else Gf.Vec3d(0, -0.32, 1.08)
         )
         target = Gf.Vec3d(0, -0.005, 0.18)
         UsdGeom.Xformable(cam).AddTransformOp().Set(
@@ -67,19 +68,24 @@ class Dashboard:
             self.markers[side] = []
             rects = json.loads(
                 (
-                    sensor_paths(side)["vtac"] / "camera_ray_rectangles_320x240.json"
+                    sensor_paths("right")["vtac"] / "camera_ray_rectangles_320x240.json"
                 ).read_text()
             )["rectangles"]
             for finger in FINGERS:
                 f = "pinky" if finger == "little" else finger
-                pts = d[f + "_points_camera_m"][:, :2]
-                R = d[f + "_camera_rotation_link"]
+                pts = d[f + "_points_camera_m"][:, :2].copy()
+                R = d[f + "_camera_rotation_link"].copy()
                 valid = (
                     d["distortion_valid"]
                     & (d[f + "_method"] == "ray_hit")
                     & d[f + "_marker_ray_valid"]
                 )
                 rect = np.array(rects[f]["corners_camera_m"])[:, :2]
+                # Map the left camera's mirrored y to the right display convention.
+                # Reflect resting points and vectors; use the shared RIGHT camera bounds.
+                if side == "left":
+                    pts[:, 1] *= -1
+                    R[:, 1] *= -1
                 self.markers[side].append((pts, R, valid, rect.min(0), rect.max(0)))
         self.provider = None
         if live:
@@ -96,7 +102,6 @@ class Dashboard:
 
     def draw(self, values, phase):
         self.world.sim.render()
-        self.world.sim.render()
         pixels = self.rgb.get_data()[..., :3]
         if pixels.shape != (780, 1040, 3):
             raise RuntimeError("Overview camera has no image")
@@ -104,7 +109,7 @@ class Dashboard:
         draw = ImageDraw.Draw(canvas)
         draw.text(
             (25, 20),
-            "RevoSim / High-fidelity tactile hands",
+            f"{self.world.variant} / Left + right tactile response / Isaac Sim + RevoSim",
             font=self.title,
             fill="white",
         )
@@ -128,7 +133,7 @@ class Dashboard:
         )
         draw.text(
             (785, 991),
-            "Pressure channels appear in the two hand-shaped maps below.",
+            "Shared optical model; release-specific taxels. Not hardware-calibrated.",
             font=self.small,
             fill="#8ea8bf",
         )
@@ -142,7 +147,7 @@ class Dashboard:
                 fill=color,
             )
             for offset, label in [
-                (10, "Raw RGB"),
+                (10, "Simulated RGB"),
                 (177, "Marker x4"),
                 (344, "Depth / mm"),
                 (512, "Tip wrench N, N·mm"),

@@ -20,3 +20,8 @@ assets. Use those assets under their original authorization.
 
 No upstream copyright or individual-file SPDX notice is superseded by the
 repository-level license.
+
+The MT/MX release URDFs and shared meshes are bundled under
+`src/revosim/assets/hands/variants`. Their source hashes and sampling conventions
+are recorded in `src/revosim/assets/model_variants.json`; the supplied CAD asset
+authorization described above also applies to these assets.
